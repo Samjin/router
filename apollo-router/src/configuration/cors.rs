@@ -118,7 +118,7 @@ impl Cors {
         };
         let cors = CorsLayer::new()
             .vary([])
-            .allow_credentials(self.allow_credentials)
+            // .allow_credentials(self.allow_credentials)
             .allow_headers(allow_headers)
             .expose_headers(cors::ExposeHeaders::list(
                 self.expose_headers
@@ -146,7 +146,7 @@ impl Cors {
         };
 
         if self.allow_any_origin {
-            Ok(cors.allow_origin(cors::Any))
+            Ok(cors.allow_origin(cors::Any).allow_credentials(false))
         } else if let Some(match_origins) = self.match_origins {
             let regexes = match_origins
                 .into_iter()
@@ -157,26 +157,32 @@ impl Cors {
                 })
                 .collect::<Vec<_>>();
 
-            Ok(cors.allow_origin(cors::AllowOrigin::predicate(
-                move |origin: &HeaderValue, _: &Parts| {
-                    origin
-                        .to_str()
-                        .map(|o| {
-                            self.origins.iter().any(|origin| origin.as_str() == o)
-                                || regexes.iter().any(|regex| regex.is_match(o))
-                        })
-                        .unwrap_or_default()
-                },
-            )))
+            let origins = self.origins.clone();
+            Ok(cors
+                .allow_origin(cors::AllowOrigin::predicate(
+                    move |origin: &HeaderValue, _: &Parts| {
+                        let origins = origins.clone();
+                        origin
+                            .to_str()
+                            .map(|o| {
+                                origins.iter().any(|origin| origin.as_str() == o)
+                                    || regexes.iter().any(|regex| regex.is_match(o))
+                            })
+                            .unwrap_or_default()
+                    },
+                ))
+                .allow_credentials(self.allow_credentials && !self.origins.is_empty()))
         } else {
-            Ok(cors.allow_origin(cors::AllowOrigin::list(
-                self.origins.into_iter().filter_map(|origin| {
-                    origin
-                        .parse()
-                        .map_err(|_| tracing::error!("origin '{origin}' is not valid"))
-                        .ok()
-                }),
-            )))
+            Ok(cors
+                .allow_origin(cors::AllowOrigin::list(
+                    self.origins.clone().into_iter().filter_map(|origin| {
+                        origin
+                            .parse()
+                            .map_err(|_| tracing::error!("origin '{origin}' is not valid"))
+                            .ok()
+                    }),
+                ))
+                .allow_credentials(self.allow_credentials && !self.origins.is_empty()))
         }
     }
 
@@ -197,11 +203,6 @@ impl Cors {
             if self.methods.iter().any(|x| x == "*") {
                 return Err("Invalid CORS configuration: Cannot combine `Access-Control-Allow-Credentials: true` \
                     with `Access-Control-Allow-Methods: *`");
-            }
-
-            if self.allow_any_origin {
-                return Err("Invalid CORS configuration: Cannot combine `Access-Control-Allow-Credentials: true` \
-                    with `allow_any_origin: true`");
             }
 
             if let Some(headers) = &self.expose_headers {
